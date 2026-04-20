@@ -70,11 +70,14 @@ def main() -> int:
             m_state, a_cmd, dt_s, hold_cruise_speed=(guidance.phase == "cruise")
         )
         # Keep sea level at z=0 and altitude AGL non-negative.
+        position_m = m_state.position_m.copy()
+        velocity_mps = m_state.velocity_mps.copy()
+        if position_m[1] <= 0.0:
+            position_m[1] = 0.0
+            velocity_mps[1] = max(0.0, velocity_mps[1])
         m_state = MissileState(
-            position_m=np.array(
-                [m_state.position_m[0], max(0.0, m_state.position_m[1])], dtype=float
-            ),
-            velocity_mps=m_state.velocity_mps,
+            position_m=position_m,
+            velocity_mps=velocity_mps,
         )
         t_pos = t_pos + t_vel * dt_s
 
