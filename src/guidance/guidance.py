@@ -1,8 +1,25 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
+
+
+@dataclass(slots=True)
+class RadarAltimeterKalmanStub:
+    """Placeholder for future wave-noise rejection filter."""
+
+    estimate_m: float = 0.0
+    initialized: bool = False
+
+    def update(self, raw_altitude_m: float, dt_s: float) -> float:
+        del dt_s
+        if not self.initialized:
+            self.estimate_m = raw_altitude_m
+            self.initialized = True
+        else:
+            self.estimate_m = raw_altitude_m
+        return self.estimate_m
 
 
 @dataclass(slots=True)
@@ -24,11 +41,14 @@ class SeaSkimGuidance:
     vz_kp: float = 2.4
     vz_ki: float = 0.35
     vz_kd: float = 0.4
-    N_gain: float = 3.0
+    N_gain: float = 4.0
 
     phase: str = "cruise"
     _vz_err_int: float = 0.0
     _prev_vz_err: float = 0.0
+    _alt_filter: RadarAltimeterKalmanStub = field(
+        default_factory=RadarAltimeterKalmanStub, init=False, repr=False
+    )
 
     def _vz_pid(self, vz_target_mps: float, vz_mps: float, dt_s: float) -> float:
         vz_err = vz_target_mps - vz_mps
@@ -53,7 +73,6 @@ class SeaSkimGuidance:
         m_p = np.asarray(missile_pos_m, dtype=float).reshape(2)  # [x, z]
         m_v = np.asarray(missile_vel_mps, dtype=float).reshape(2)  # [vx, vz]
         t_p = np.asarray(target_pos_m, dtype=float).reshape(2)  # [x, z]
-        t_v = np.asarray(target_vel_mps, dtype=float).reshape(2)  # [vx, vz]
 
         rel = t_p - m_p
         range_m = float(np.linalg.norm(rel))
@@ -64,14 +83,19 @@ class SeaSkimGuidance:
             self._prev_vz_err = 0.0
 
         # TODO: Implement 3-State Kalman Filter for Radar Altimeter wave noise rejection.
-        if self.phase == "popup" and m_p[1] >= self.popup_alt_m - 0.1:
+        if (
+            self.phase == "popup"
+            and m_p[1] >= self.popup_alt_m * 0.98
+            and abs(m_v[1]) < 3.0
+        ):
             self.phase = "dive"
             self._vz_err_int = 0.0
             self._prev_vz_err = 0.0
 
         if self.phase == "cruise":
-            # TODO: Implement 3-State Kalman Filter for Radar Altimeter wave noise rejection.
-            alt_err_m = self.cruise_alt_m - m_p[1]
+            # TODO: Replace stub with 3-state KF for radar-altimeter wave-noise rejection.
+            measured_alt_m = self._alt_filter.update(m_p[1], dt_s)
+            alt_err_m = self.cruise_alt_m - measured_alt_m
             vz_target = float(
                 np.clip(
                     self.alt_to_vz_gain * alt_err_m,
@@ -82,8 +106,9 @@ class SeaSkimGuidance:
             az_cmd = self._vz_pid(vz_target, m_v[1], dt_s)
             ax_cmd = 0.0
         elif self.phase == "popup":
-            # TODO: Implement 3-State Kalman Filter for Radar Altimeter wave noise rejection.
-            alt_err_m = self.popup_alt_m - m_p[1]
+            # TODO: Replace stub with 3-state KF for radar-altimeter wave-noise rejection.
+            measured_alt_m = self._alt_filter.update(m_p[1], dt_s)
+            alt_err_m = self.popup_alt_m - measured_alt_m
             vz_target = float(
                 np.clip(
                     self.alt_to_vz_gain * alt_err_m,
@@ -94,6 +119,7 @@ class SeaSkimGuidance:
             az_cmd = self._vz_pid(vz_target, m_v[1], dt_s)
             ax_cmd = 0.0
         else:  # dive
+            t_v = np.asarray(target_vel_mps, dtype=float).reshape(2)  # [vx, vz]
             rel_p = t_p - m_p
             rel_v = t_v - m_v
             R = float(np.linalg.norm(rel_p))

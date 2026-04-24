@@ -41,10 +41,12 @@ class Missile:
         return float(self.air_density_kgpm3 * np.exp(-alt_non_negative / 8500.0))
 
     def _get_speed_of_sound(self, altitude_m: float) -> float:
-        # Simple model: decreases with altitude then floors at stratosphere-like value.
-        return float(max(315.0, 340.0 - 0.003 * max(0.0, altitude_m)))
+        """ISA-like model with stratosphere floor."""
+        alt_non_negative = max(0.0, altitude_m)
+        return float(max(295.0, 340.29 - 0.00648 * alt_non_negative))
 
     def _get_drag_area(self, speed_mps: float, altitude_m: float) -> float:
+        # NOTE: Simplified transonic drag spike for initial validation.
         a_local = self._get_speed_of_sound(altitude_m)
         mach = speed_mps / max(a_local, 1e-6)
 
@@ -95,29 +97,77 @@ class Missile:
         dt_s: float,
         hold_cruise_speed: bool = False,
     ) -> MissileState:
-        accel_cmd = self._clamp_accel_cmd(accel_cmd_mps2)
+        if dt_s <= 0.0:
+            raise ValueError(f"dt_s must be positive, got {dt_s}")
+        if state.position_m.shape != (2,):
+            raise ValueError(
+                f"position_m must have shape (2,), got {state.position_m.shape}"
+            )
+        if state.velocity_mps.shape != (2,):
+            raise ValueError(
+                f"velocity_mps must have shape (2,), got {state.velocity_mps.shape}"
+            )
 
-        k1_pos, k1_vel = self._compute_derivatives(state, accel_cmd, hold_cruise_speed)
+        k1_pos, k1_vel = self._compute_derivatives(
+            state, accel_cmd_mps2, hold_cruise_speed
+        )
 
         s2 = MissileState(
             position_m=state.position_m + 0.5 * dt_s * k1_pos,
             velocity_mps=state.velocity_mps + 0.5 * dt_s * k1_vel,
         )
-        k2_pos, k2_vel = self._compute_derivatives(s2, accel_cmd, hold_cruise_speed)
+        k2_pos, k2_vel = self._compute_derivatives(
+            s2, accel_cmd_mps2, hold_cruise_speed
+        )
 
         s3 = MissileState(
             position_m=state.position_m + 0.5 * dt_s * k2_pos,
             velocity_mps=state.velocity_mps + 0.5 * dt_s * k2_vel,
         )
-        k3_pos, k3_vel = self._compute_derivatives(s3, accel_cmd, hold_cruise_speed)
+        k3_pos, k3_vel = self._compute_derivatives(
+            s3, accel_cmd_mps2, hold_cruise_speed
+        )
 
         s4 = MissileState(
             position_m=state.position_m + dt_s * k3_pos,
             velocity_mps=state.velocity_mps + dt_s * k3_vel,
         )
-        k4_pos, k4_vel = self._compute_derivatives(s4, accel_cmd, hold_cruise_speed)
+        k4_pos, k4_vel = self._compute_derivatives(
+            s4, accel_cmd_mps2, hold_cruise_speed
+        )
 
         p_next = state.position_m + (dt_s / 6.0) * (k1_pos + 2.0 * k2_pos + 2.0 * k3_pos + k4_pos)
         v_next = state.velocity_mps + (dt_s / 6.0) * (k1_vel + 2.0 * k2_vel + 2.0 * k3_vel + k4_vel)
         return MissileState(position_m=p_next, velocity_mps=v_next)
+
+    def get_rcs_dbsm(
+        self,
+        missile_pos_m: np.ndarray,
+        target_pos_m: np.ndarray,
+        velocity_mps: np.ndarray,
+    ) -> float:
+        """Estimate RCS [dBsm] from simple aspect-angle model."""
+        m_pos = np.asarray(missile_pos_m, dtype=float).reshape(2)
+        t_pos = np.asarray(target_pos_m, dtype=float).reshape(2)
+        vel = np.asarray(velocity_mps, dtype=float).reshape(2)
+
+        los_vec = t_pos - m_pos
+        los_norm = float(np.linalg.norm(los_vec))
+        if los_norm < 1e-6:
+            return 0.0
+
+        vel_norm = float(np.linalg.norm(vel))
+        if vel_norm < 1e-6:
+            return 0.0
+
+        los_hat = los_vec / los_norm
+        vel_hat = vel / vel_norm
+        cos_aspect = float(np.dot(los_hat, vel_hat))
+        aspect_deg = float(np.degrees(np.arccos(np.clip(cos_aspect, -1.0, 1.0))))
+
+        rcs_head_dbsm = 15.0
+        rcs_tail_dbsm = 9.0
+        aspect_norm = (aspect_deg - 90.0) / 90.0
+        rcs_dbsm = rcs_head_dbsm - (rcs_head_dbsm - rcs_tail_dbsm) * (aspect_norm**2)
+        return float(rcs_dbsm)
 

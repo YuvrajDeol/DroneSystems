@@ -20,7 +20,7 @@ target:
 
 guidance:
   cruise_alt_m: 5.0
-  terminal_range_m: 5000.0
+  terminal_range_m: 15000.0
   popup_alt_m: 150.0
   max_accel_mps2: 30.0
   max_vz_cmd_mps: 25.0
@@ -28,7 +28,7 @@ guidance:
   vz_kp: 6.0
   vz_ki: 1.0
   vz_kd: 1.0
-  dive_nav_gain: 1.2
+  N_gain: 4.0
 
 output:
   out_dir: "data/processed"
